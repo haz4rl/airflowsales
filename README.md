@@ -1,133 +1,209 @@
 # Airflow Sales
 
-**Agentic sales intelligence that turns a company domain into evidence-backed research, qualification, outreach and an auditable workflow run.**
+**An agentic sales-intelligence system that turns a raw company domain into researched, qualified, evidence-backed sales opportunities through a multi-stage LLM workflow with human approval.**
 
-> The name refers to *deal flow*, not [Apache Airflow](https://airflow.apache.org/) — no DAG engine is involved.
+> The name refers to *deal flow*, not [Apache Airflow](https://airflow.apache.org/) — no DAG scheduler is involved.
 
-Airflow Sales is a full-stack portfolio project built to demonstrate production-minded agentic application engineering rather than a one-prompt LLM demo. A campaign defines an ICP and qualification criteria. Given a company domain, the system searches the live web, persists source evidence, synthesizes company intelligence, scores the prospect, drafts outreach, critiques unsupported claims, **revises the draft when the critic rejects it (bounded),** records workflow telemetry, and routes approved work through a human decision.
+**[Live demo](https://airflowsales.vercel.app)** · [API docs (demo)](https://airflowsales-backend.vercel.app/docs) · [License (MIT)](LICENSE)
 
-## Product flow
+## What Airflow Sales does
 
-`Campaign → Discover company → Tavily research → Evidence → Research agent → Qualification → Outreach → Critic ⇄ bounded revision → Human approval`
+Give it a campaign (an ICP with qualification criteria) and a company domain. It then:
 
-The operator UI is a Next.js workspace with five surfaces — Prospects, Campaigns, Discover, Workflow runs and Analytics — plus a periodic API health indicator (30-second poll), light/dark themes and keyboard-navigable list views. PostgreSQL is the system of record; workflow state is persisted rather than kept only in model context.
+1. searches the live web for commercial signals about that company,
+2. persists the source evidence in Postgres,
+3. synthesizes structured company intelligence from that evidence,
+4. qualifies the prospect — a 0–100 score and GO / MAYBE / NO_GO decision against the campaign criteria,
+5. drafts outreach grounded in the evidence,
+6. runs a critic agent that checks every claim in the draft against the evidence and **rejects unsupported claims**, driving a bounded revision loop,
+7. records the complete workflow telemetry (every stage, latency, token usage, retries, failures), and
+8. routes strong prospects through an explicit human approve/reject decision.
 
-## Stack
+The point is not "an LLM wrote an email." The point is a **durable, auditable agentic workflow**: external tools, structured outputs, defensive validation, failure recovery, evidence grounding, and a human gate — the things that separate a demo from an engineered system.
 
-- **Frontend:** Next.js 16, React 19, TypeScript
-- **Backend:** FastAPI, Pydantic, SQLAlchemy 2.x, Alembic (Python 3.11)
-- **Data:** PostgreSQL 16
-- **AI & tools:** Groq (structured LLM output), Tavily Search
-- **Quality:** pytest with deterministic provider fakes, ruff lint/format, TypeScript type checking, production Next build, GitHub Actions (with a Postgres service container)
-- **Deployment:** Docker / Docker Compose
+## Why I built it
 
-## What is real
+Most LLM prototypes collapse at the same seams: brittle JSON, no grounding, silent provider failures, state that lives only in a prompt, and no path for a human to intervene. I wanted a project that takes those seams as the actual engineering problem. Every agent output here is validated before it touches the database, every failure mode has a defined behavior, and every decision can be traced back to the exact evidence and prompts that produced it.
 
-- Live company research uses Tavily when configured; without keys the API fails cleanly instead of returning mock data.
-- LLM research, qualification, outreach, critique **and critic-driven draft revision** use Groq when configured. Every prompt sent is persisted on the workflow event so decisions are reproducible.
-- The critic is a real gate: unsupported claims trigger a bounded revision loop (`OUTREACH_MAX_REVISIONS`, default 2), every attempt is recorded, and the final review decides whether a GO prospect waits for human approval. Critic output is coerced defensively — a string `"false"` from the model cannot flip the gate.
-- Evidence, prospects, qualifications, workflow runs and workflow events persist in PostgreSQL, with indexes on every foreign key and list-ordering column.
-- Workflow events record tool/agent stages, latency, token usage and an **estimated** token cost (usage × configurable per-million pricing — never invented).
-- Provider retries and failures are persisted as workflow events; the backend logs failures with step context.
-- The dashboard reads the real API; it does not use mock prospect or analytics data. Run success rates are computed from explicit run statuses.
-- Company icons are resolved from the company domain with a graceful fallback.
+## Screenshots
 
-## Local setup
+<!-- Capture from the live demo (or local setup) and drop into docs/screenshots/ — see "Screenshot checklist" at the bottom of this file for exact pages/states. -->
 
-### Prerequisites
+| | |
+| :---: | :---: |
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Campaigns](docs/screenshots/campaigns.png) |
+| ![Discover](docs/screenshots/discover.png) | ![Prospect detail](docs/screenshots/prospect-qualification.png) |
+| ![Revision loop timeline](docs/screenshots/revision-loop.png) | ![Human approval](docs/screenshots/approval.png) |
+| | ![Analytics](docs/screenshots/analytics.png) |
 
-Python 3.11, Node 22, Docker (for Postgres).
+## Agentic workflow
 
-### 1. Database
-
-```bash
-docker compose up -d db
+```
+Campaign (ICP + criteria)
+  └─ Discover(domain)
+       ├─ Tavily web search ──► Evidence rows (persisted, ranked)
+       ├─ Research agent ─────► structured company intelligence
+       ├─ Qualification agent ► score (0–100) · GO|MAYBE|NO_GO
+       ├─ Outreach agent ─────► grounded draft
+       ├─ Critic agent ───────► approved? · unsupported claims
+       │        └─ rejects ───► bounded revision loop (≤ OUTREACH_MAX_REVISIONS)
+       ├─ WorkflowRun + events persisted at every stage
+       └─ GO + critic-approved ──► Human approval (approve | reject)
 ```
 
-### 2. Backend
+```mermaid
+sequenceDiagram
+    participant UI as Operator UI
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant S as Tavily
+    participant L as Groq LLM
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt   # includes pytest + ruff
-cp .env.example .env
+    UI->>API: POST /v1/prospects/discover (campaign_id, domain)
+    API->>DB: Company + Prospect + WorkflowRun (RUNNING)
+    API->>S: web search for the domain
+    S-->>API: ranked results
+    API->>DB: Evidence rows
+    API->>L: research agent (JSON)
+    L-->>API: company intelligence
+    API->>L: qualification agent
+    L-->>API: score + GO|MAYBE|NO_GO
+    API->>L: outreach agent
+    L-->>API: draft
+    API->>L: critic agent (draft vs evidence)
+    L-->>API: approved + unsupported_claims
+    loop critic rejects (≤ OUTREACH_MAX_REVISIONS)
+        API->>L: revise draft with rejected claims
+        API->>L: re-critique
+    end
+    API->>DB: final status + full event log
+    UI->>API: POST /v1/workflow-runs/{id}/approval
+    API->>DB: APPROVED | REJECTED + HUMAN event
 ```
 
-Set `TAVILY_API_KEY`, `GROQ_API_KEY` and (if not using the compose Postgres) your PostgreSQL settings in `.env`. Never commit `.env`.
+The entire run executes synchronously inside the discover request (bounded by a 300 s client timeout). That is a deliberate simplicity trade-off — see [Known limitations](#known-limitations).
 
-Run migrations and the API:
+## Architecture
 
-```bash
-alembic upgrade head
-python -m uvicorn backend.app.main:app --reload --port 8000
+```mermaid
+graph LR
+    UI["Next.js 16 (React 19)"] -->|"REST /v1 · JSON"| API["FastAPI (Python 3.11)"]
+    API --> DB[("PostgreSQL 16<br/>system of record")]
+    API --> T["Tavily Search"]
+    API --> G["Groq chat completions"]
+    subgraph "Serverless (Vercel) or Docker"
+        API
+    end
+    UI -.->|"deployed on Vercel"| UI
+    DB -.->|"Neon (prod) · Docker (local)"| DB
 ```
 
-API docs: `http://localhost:8000/docs`
+- **Frontend** — Next.js 16 App Router workspace: Dashboard, Campaigns, Discover, Prospects (list + detail), Workflow runs (list + detail), Analytics. Light/dark themes, loading/error/empty states on every data surface, keyboard-navigable lists, live-ticking durations for running jobs.
+- **API** — FastAPI with Pydantic request validation. Campaign CRUD with a history-guarded delete (409 when prospects exist), synchronous discovery, prospect/run retrieval, human-approval endpoint, and a dashboard summary computed from persisted data.
+- **Persistence** — SQLAlchemy 2.x models, Alembic migrations, indexes on every foreign key and list-ordering column. Company, Prospect, Evidence, Qualification, WorkflowRun, WorkflowEvent. Postgres in production (Neon) and CI; SQLite in the test suite via dialect-portable column types.
+- **Tools** — Tavily (web search) and Groq (chat completions with `response_format: json_object`), each behind a small provider interface with deterministic fakes for tests.
+- **Workflow engine** — an explicit Python function (`run_sales_intelligence`), not a framework: each stage is a separate agent boundary that emits typed events and commits its results durably.
 
-### 3. Frontend
+## Reliability & engineering
+
+Everything in this section is implemented and covered by tests — this is not a roadmap.
+
+- **Structured outputs, defensively coerced.** LLM calls request JSON; every consumer coerces before trusting: scores clamp to 0–100, confidence to 0–1, decisions to an enum with a `MAYBE` fallback, and critic `approved` values are coerced so the string `"false"` can never flip the approval gate (a real LLM failure mode).
+- **Two-schedule retry/backoff.** Transient errors (5xx, network) retry with fast exponential backoff; HTTP 429s are treated as minute-window quota events — `Retry-After` is honored when the provider sends it, otherwise a window-aware schedule (15 s → 30 s, capped at 60 s) is used. Retries are persisted as workflow events, not hidden.
+- **Bounded token escalation.** Groq's `json_validate_failed`-on-truncated-JSON 400 (completion tokens exhausted) triggers exactly one escalated re-request (2048 → 4096 tokens); every other 400 is permanent and surfaces its sanitized reason immediately.
+- **Timeouts everywhere.** LLM 30 s, search 15 s, discovery client 300 s — no call is unbounded.
+- **Partial failure is preserved, not rolled back.** If the critic or outreach stage fails, the qualification that already succeeded is committed; the run and prospect are marked FAILED with the failing step and sanitized error recorded as an event. The UI distinguishes "run stopped" from "judgment recorded before the failure."
+- **Evidence grounding + untrusted-input framing.** Web excerpts are capped, budgeted, and framed as untrusted data in every prompt; the critic checks drafts against persisted evidence and the revision loop is bounded.
+- **Idempotent discovery.** Re-discovering a domain reuses the existing Company, Prospect, and Evidence rows (unique constraints + lookup-before-insert); a new workflow run records the new attempt without duplicating facts.
+- **Input validation.** Pydantic schemas bound and normalize domains (`https://` prefixes stripped, shape-checked), reject blank campaign text, and bound pagination.
+- **History-guarded deletes.** Deleting a campaign with attached research history is refused with 409 and the counts; only empty campaigns delete.
+- **Credential-safe errors.** Provider failures pass through a redaction filter before reaching API responses or logs.
+- **Serverless-correct DB access.** The engine uses `NullPool` — connections are never reused across warm invocations, avoiding stale-connection failures behind Neon's connection culling.
+
+## Observability / workflow telemetry
+
+Every run persists a complete, queryable event log (`WorkflowEvents`) with typed events:
+
+- `TOOL` / `LLM` — one per stage, with **latency_ms**, **token usage as reported by the provider**, and the **exact prompt sent** (truncated for auditability);
+- `RETRY` — one per provider retry, with delay, reason, and status code;
+- `ERROR` — the failing step and sanitized error text;
+- `HUMAN` — the approval decision and note.
+
+Run totals aggregate tokens and an **estimated** cost (reported usage × configurable per-million pricing — never invented). The dashboard computes prospect statuses, run success rates, and totals from this persisted data, and the UI surfaces the same events in per-run timelines.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | Next.js 16, React 19, TypeScript 5.9, lucide-react |
+| API | FastAPI, Pydantic v2 (Python 3.11) |
+| Data | SQLAlchemy 2.x, Alembic, PostgreSQL 16 |
+| LLM | Groq chat completions (default `openai/gpt-oss-120b`, structured JSON) |
+| Web search | Tavily |
+| Quality | pytest (deterministic provider fakes — no network, no credits), ruff, `tsc`, `next build`, GitHub Actions (Postgres service container, migration drift check) |
+| Deployment | Vercel (frontend + serverless backend), Neon Postgres (prod); Docker / Compose for local parity |
+
+## Testing & quality
 
 ```bash
-cd frontend
-npm ci
-cp .env.local.example .env.local
-npm run dev
-```
-
-Open `http://localhost:3000`. The default API URL is `http://localhost:8000`.
-
-### Docker option
-
-Create `.env` first (the compose file reads it), then:
-
-```bash
-docker compose up --build
-```
-
-The api service runs `alembic upgrade head` on boot. The frontend image bakes `NEXT_PUBLIC_API_URL` at build time — pass `--build-arg NEXT_PUBLIC_API_URL=http://<host>:8000` when the API is not on the same host.
-
-### Vercel (backend)
-
-The FastAPI backend deploys as a Vercel Python serverless project:
-
-1. Create a Vercel project with **Root Directory** `backend` (Python is detected from `backend/requirements.txt`).
-2. Set environment variables (Project → Settings → Environment Variables):
-   - `DATABASE_URL` — the Neon PostgreSQL connection string (Neon's value includes `sslmode=require`)
-   - `TAVILY_API_KEY`, `GROQ_API_KEY`
-   - optional overrides: `GROQ_MODEL`, `CORS_ORIGINS` (comma-separated; include the frontend origin)
-3. Apply Alembic migrations to the Neon database **once**, from the repository root (migrations intentionally live outside the serverless bundle):
-
-   ```bash
-   DATABASE_URL="<neon-connection-string>" alembic upgrade head
-   ```
-
-4. Deploy. `backend/api/index.py` exposes the ASGI app and `backend/vercel.json` rewrites all paths to it, so `/health`, `/docs` and `/v1/*` are served at the deployment root.
-
-## Verification
-
-```bash
-pytest -q                      # deterministic suite — no network, no API credits
+pytest -q                      # 106 tests — deterministic, no network, no API credits
 ruff check backend tests migrations
 ruff format --check backend tests migrations
-cd frontend
-npm run typecheck
-npm run build
+cd frontend && npm run typecheck && npm run build
+alembic check                  # migration drift check
 ```
 
-CI runs all of the above (backend tests also against a Postgres 16 service container, plus `alembic upgrade head` and a migration drift check) on every push and pull request.
+CI runs the backend suite against a real Postgres 16 service container (plus `alembic upgrade head` + drift check) and the frontend typecheck/production build on every push.
+
+Test coverage includes: the full workflow against scripted providers (including revision loops and partial failures), the exact Groq token-exhaustion 400 body, rate-limit retry schedules, scoring-path validation (range clamps, enum fallback, decision→status mapping, FAILED-run qualification persistence), API contracts, delete guards, and migration/schema checks. Tests dispatch fake providers by system-prompt routing so production code paths run unmodified.
+
+## Example qualification behavior
+
+Qualification scoring is **LLM-delegated by design**: the model judges fit against the campaign criteria and returns a 0–100 score with a decision; the application validates the shape (clamps, enums, types) but does not invent a deterministic scoring formula. The deterministic suite (`tests/test_scoring.py`) drives synthetic evidence through the real workflow to pin the surrounding behavior:
+
+- near-perfect ICP evidence → high scores persist unclamped (no hidden ceiling), status becomes `AWAITING_APPROVAL`;
+- partial-match evidence → `MAYBE`;
+- clear non-match → `NO_GO` → `REJECTED`;
+- out-of-range or malformed model output (`150`, `"92.7"`, `"GO!"`) is coerced safely.
+
+These are deterministic tests of the engineering shell, not real customer results — live scores reflect whatever the model concludes from real web evidence (which the demo's conservative prompt encourages).
 
 ## API surface
 
 - `GET /health`
-- `GET /v1/campaigns`
-- `POST /v1/campaigns`
-- `DELETE /v1/campaigns/{id}` — deletes only campaigns with no prospects; history-bearing campaigns are refused with 409 and counts
-- `GET /v1/prospects`
-- `POST /v1/prospects/discover`
-- `GET /v1/prospects/{id}`
-- `GET /v1/workflow-runs`
-- `GET /v1/workflow-runs/{id}`
+- `GET|POST /v1/campaigns`, `DELETE /v1/campaigns/{id}` (history-guarded)
+- `GET /v1/prospects`, `POST /v1/prospects/discover`, `GET /v1/prospects/{id}`
+- `GET /v1/workflow-runs`, `GET /v1/workflow-runs/{id}`
 - `POST /v1/workflow-runs/{id}/approval`
 - `GET /v1/dashboard/summary`
+- Interactive OpenAPI docs at `/docs`
+
+## Local development
+
+**Prerequisites:** Python 3.11, Node 22, Docker (for Postgres).
+
+```bash
+# 1. Database
+docker compose up -d db
+
+# 2. Backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env            # then add TAVILY_API_KEY / GROQ_API_KEY — never commit .env
+alembic upgrade head
+python -m uvicorn backend.app.main:app --reload --port 8000
+
+# 3. Frontend
+cd frontend && npm ci
+cp .env.local.example .env.local   # defaults to http://localhost:8000
+npm run dev
+```
+
+Open `http://localhost:3000` (API docs at `http://localhost:8000/docs`). Without provider keys the API still boots and fails discovery cleanly — no mock data is ever substituted.
+
+**Docker Compose:** create `.env` first, then `docker compose up --build` (api runs migrations on boot; frontend bakes `NEXT_PUBLIC_API_URL` at build time).
+
+**Production (how the live demo runs):** the backend is a Vercel Python serverless project rooted at `backend/` (`backend/api/index.py` exposes the ASGI app; `backend/vercel.json` rewrites all paths to it), the frontend is a separate Vercel project with `NEXT_PUBLIC_API_URL` pointing at the backend origin, and the database is Neon. Alembic migrations are applied once from the repo root against the production `DATABASE_URL` (`alembic upgrade head`); they intentionally live outside the serverless bundle. `CORS_ORIGINS` on the backend must list the frontend origin.
 
 ## Environment variables
 
@@ -144,8 +220,8 @@ CI runs all of the above (backend tests also against a Postgres 16 service conta
 | `LLM_MAX_TOKENS` | no | `2048` | Completion cap per agent step |
 | `LLM_MAX_TOKENS_ESCALATED` | no | `4096` | One-shot escalated budget when a step is cut off mid-JSON by the token cap |
 | `MAX_RETRIES` | no | `2` | Provider retries for transient failures |
-| `RETRY_BASE_DELAY_SECONDS` | no | `0.5` | Exponential backoff base |
-| `RETRY_MAX_DELAY_SECONDS` | no | `8` | Backoff ceiling |
+| `RETRY_BASE_DELAY_SECONDS` | no | `0.5` | Exponential backoff base (transient errors) |
+| `RETRY_MAX_DELAY_SECONDS` | no | `8` | Transient backoff ceiling |
 | `RETRY_RATE_LIMIT_BASE_DELAY_SECONDS` | no | `15` | 429 backoff base (Retry-After is honored when provided) |
 | `RETRY_RATE_LIMIT_MAX_DELAY_SECONDS` | no | `60` | 429 backoff ceiling |
 | `OUTREACH_MAX_REVISIONS` | no | `2` | Bound on critic-driven draft revisions |
@@ -153,15 +229,40 @@ CI runs all of the above (backend tests also against a Postgres 16 service conta
 | `CRITIC_EVIDENCE_BUDGET_CHARS` | no | `5000` | Serialized-evidence budget for critic passes |
 | `CORS_ORIGINS` | no | `localhost:3000,localhost:8000` | Comma-separated allowed origins |
 
-## Architecture choices
+## Known limitations
 
-1. **Company and Prospect are separate.** A company is factual identity; a prospect is that company evaluated inside one campaign.
-2. **Evidence is first-class.** Agent conclusions can be inspected against persisted sources; web excerpts are framed as untrusted data in every prompt.
-3. **Business state is durable.** PostgreSQL owns truth; the LLM context does not.
-4. **Agent boundaries are explicit.** Search, research, qualification, outreach and critique are separate steps with observable events — and the critic can drive a *bounded* revision of the outreach draft rather than rubber-stamping it.
-5. **Human approval is a workflow state transition.** It is not a decorative UI action, and the gate coerces critic output defensively.
-6. **Providers are replaceable and testable.** Production uses real providers; tests use deterministic fakes so CI never spends API credits.
+- **No authentication.** The API is an open operator tool by design (portfolio demo); do not expose it with paid provider keys on an untrusted network.
+- **Qualification scores are LLM-judged**, not a deterministic formula — the system validates and persists them; it does not guarantee they are right.
+- **Synchronous workflow.** A discovery runs in-request; there is no queue, worker pool, or job scheduler. Long multi-prospect batches would want one.
+- **Single-tenant.** One workspace, no users, no per-tenant isolation.
+- **Provider quotas are real.** On Groq's free tier a full 4–8-call workflow can hit rate limits; window-aware retries mitigate, a paid tier removes the concern.
+- **Production migrations are manual** (`alembic upgrade head` from the repo root) — correct for this scale, not for a team deploying continuously.
+
+## Engineering decisions & trade-offs
+
+1. **Company ≠ Prospect.** A company is factual identity (deduplicated by domain); a prospect is that company evaluated inside one campaign. Evidence attaches to the company, qualification to the prospect.
+2. **Evidence is first-class.** Agent conclusions can always be inspected against persisted sources — and those sources are framed as untrusted input inside every prompt.
+3. **Database owns truth, not the LLM.** Workflow state, evidence, and decisions are durable rows; model context is disposable.
+4. **An explicit workflow function over an agent framework.** The stage sequence, bounds, and failure semantics are readable Python — no LangGraph/Celery/Redis. That was a scope decision: the hard problems here are grounding, validation, and failure handling, not orchestration at scale.
+5. **The critic is a gate, not decoration.** Unsupported claims block approval and trigger bounded rewrites; the model's `approved` field is coerced defensively because a string `"false"` once routed unapproved outreach to humans.
+6. **Human approval is a state transition.** Approve/reject writes to the run and prospect and appends a `HUMAN` event — not a UI-only toggle.
+7. **Synchronous execution.** Acceptable at demo scale and dramatically simpler to reason about; the event log and stage boundaries are designed so a queue could be introduced without redesigning the agents.
+8. **Deterministic tests, real providers in prod.** CI never spends API credits; production never serves mock data. Provider interfaces are swapped at the dependency-injection boundary.
+
+## Development approach
+
+Built with AI-assisted development tooling. The architecture, failure-mode analysis, test design, review of every change, and production debugging (from Vercel 404s through Groq rate-limit semantics to a stale-critic API bug) were specified, verified, and owned by me — the repository is meant to demonstrate that engineering process, not autonomous code generation.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- ## Screenshot checklist (for the maintainer — remove this block once images are committed)
+1. docs/screenshots/dashboard.png        — Dashboard (/) after at least one completed discovery (summary cards populated)
+2. docs/screenshots/campaigns.png        — /campaigns with one campaign card visible
+3. docs/screenshots/discover.png         — /discover with a domain entered and a completed result panel (evidence count visible)
+4. docs/screenshots/prospect-qualification.png — /prospects/{id} of an AWAITING_APPROVAL prospect: status + decision badges, score breakdown, outreach draft, approved critic review
+5. docs/screenshots/revision-loop.png    — /runs/{id} of a run containing outreach_revision + critic_revision timeline events
+6. docs/screenshots/approval.png         — /prospects/{id} human-approval side panel (Approve/Reject + note field) on an AWAITING_APPROVAL prospect
+7. docs/screenshots/analytics.png        — /analytics with real run-status / token / cost charts
+-->
