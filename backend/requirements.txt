@@ -1,0 +1,12 @@
+# Runtime dependencies for the Vercel deployment (Root Directory: backend).
+# Keep in sync with the repository-root requirements.txt (runtime lines only;
+# test/lint tools live in requirements-dev.txt and are not bundled here).
+fastapi==0.115.0
+uvicorn==0.31.0
+sqlalchemy==2.0.43
+psycopg2-binary==2.9.11
+alembic==1.13.3
+pydantic==2.12.5
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+httpx==0.27.2

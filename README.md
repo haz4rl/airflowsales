@@ -85,6 +85,23 @@ docker compose up --build
 
 The api service runs `alembic upgrade head` on boot. The frontend image bakes `NEXT_PUBLIC_API_URL` at build time — pass `--build-arg NEXT_PUBLIC_API_URL=http://<host>:8000` when the API is not on the same host.
 
+### Vercel (backend)
+
+The FastAPI backend deploys as a Vercel Python serverless project:
+
+1. Create a Vercel project with **Root Directory** `backend` (Python is detected from `backend/requirements.txt`).
+2. Set environment variables (Project → Settings → Environment Variables):
+   - `DATABASE_URL` — the Neon PostgreSQL connection string (Neon's value includes `sslmode=require`)
+   - `TAVILY_API_KEY`, `GROQ_API_KEY`
+   - optional overrides: `GROQ_MODEL`, `CORS_ORIGINS` (comma-separated; include the frontend origin)
+3. Apply Alembic migrations to the Neon database **once**, from the repository root (migrations intentionally live outside the serverless bundle):
+
+   ```bash
+   DATABASE_URL="<neon-connection-string>" alembic upgrade head
+   ```
+
+4. Deploy. `backend/api/index.py` exposes the ASGI app and `backend/vercel.json` rewrites all paths to it, so `/health`, `/docs` and `/v1/*` are served at the deployment root.
+
 ## Verification
 
 ```bash
