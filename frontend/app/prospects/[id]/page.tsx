@@ -205,6 +205,13 @@ export default function ProspectDetailPage() {
             {data.company.industry ? ` · ${data.company.industry}` : ""}
             {data.company.location ? ` · ${data.company.location}` : ""}
           </p>
+
+          {runs[0]?.status === "FAILED" && qualification ? (
+            <p className="tiny faint">
+              The latest workflow run stopped before completing. The qualification below was
+              recorded before the failure — see workflow activity for where the run stopped.
+            </p>
+          ) : null}
         </div>
 
         <div className="detail-actions">

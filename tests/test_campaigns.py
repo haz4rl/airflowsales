@@ -65,6 +65,14 @@ def test_create_campaign_rejects_invalid_payload(client):
     assert ("body", "qualification_criteria") in error_locs
 
 
+def test_create_campaign_rejects_blank_required_text(client):
+    response = client.post("/v1/campaigns", json={**VALID_PAYLOAD, "name": "   "})
+
+    assert response.status_code == 422
+    error_locs = {tuple(error["loc"]) for error in response.json()["detail"]}
+    assert ("body", "name") in error_locs
+
+
 def test_list_campaigns(client):
     client.post("/v1/campaigns", json=VALID_PAYLOAD)
     client.post(

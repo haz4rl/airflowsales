@@ -36,7 +36,9 @@ def _agent_outputs(db: Session, run_id: UUID) -> tuple[dict | None, dict | None]
         db.query(WorkflowEvent)
         .filter(
             WorkflowEvent.run_id == run_id,
-            WorkflowEvent.name.in_(("outreach_agent", "critic_agent", "outreach_revision")),
+            WorkflowEvent.name.in_(
+                ("outreach_agent", "critic_agent", "outreach_revision", "critic_revision")
+            ),
         )
         .order_by(WorkflowEvent.created_at.asc(), WorkflowEvent.id.asc())
         .all()

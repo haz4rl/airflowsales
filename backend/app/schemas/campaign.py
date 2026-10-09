@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CampaignBase(BaseModel):
@@ -19,6 +19,14 @@ class CampaignBase(BaseModel):
     qualification_criteria: str = Field(
         ..., json_schema_extra={"example": "Must have a sales team of at least 5 people."}
     )
+
+    @field_validator("name", "product_description", "qualification_criteria")
+    @classmethod
+    def non_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
 
 
 class CampaignCreate(CampaignBase):

@@ -198,6 +198,27 @@ def test_get_prospect_returns_run_id_and_agent_artifacts(client):
     assert body["critic"] == data["critic"]
 
 
+def test_get_prospect_returns_final_critic_review_after_revision(client):
+    """After the revision loop, GET must return the final critic_revision
+    review (which gated the run), not the stale first-pass critic_agent one."""
+    first_rejection = {
+        "approved": False,
+        "unsupported_claims": ["expansion"],
+        "notes": "Unsupported by evidence.",
+    }
+    final_approval = {"approved": True, "unsupported_claims": [], "notes": "Grounded."}
+    data, _ = discover(client, critic_responses=[first_rejection, final_approval])
+
+    response = client.get(f"/v1/prospects/{data['prospect']['id']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["critic"]["approved"] is True
+    assert body["critic"]["unsupported_claims"] == []
+    assert body["outreach"] == data["outreach"]  # final revised draft
+    assert data["critic"]["approved"] is True  # discover POST agrees
+
+
 def test_list_campaigns_rejects_out_of_range_pagination(client):
     assert client.get("/v1/campaigns?limit=0").status_code == 422
     assert client.get("/v1/campaigns?limit=501").status_code == 422
