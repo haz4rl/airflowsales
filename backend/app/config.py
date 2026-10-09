@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     MAX_RETRIES: int = 2
     RETRY_BASE_DELAY_SECONDS: float = 0.5
     RETRY_MAX_DELAY_SECONDS: float = 8.0
+    # 429s reflect a minute-window quota, so rate-limit retries wait long
+    # enough to escape the window (Retry-After is honored when provided).
+    # Ordinary transient errors keep the faster RETRY_* schedule above.
+    RETRY_RATE_LIMIT_BASE_DELAY_SECONDS: float = 15.0
+    RETRY_RATE_LIMIT_MAX_DELAY_SECONDS: float = 60.0
+    # Critic passes re-review every revision; they receive the top-ranked
+    # evidence excerpts under a tighter budget than the research step.
+    CRITIC_EVIDENCE_MAX_EXCERPTS: int = 3
+    CRITIC_EVIDENCE_BUDGET_CHARS: int = 5000
     # Bounded critic-driven revision of outreach drafts (see run_sales_intelligence).
     OUTREACH_MAX_REVISIONS: int = 2
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"

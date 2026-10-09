@@ -1,4 +1,5 @@
 from backend.app.agents.prompts import UNTRUSTED_NOTE, dumps, render_evidence
+from backend.app.config import settings
 from backend.app.tools.llm import LLMProvider
 
 SYSTEM = "You are a strict factuality critic. Reject unsupported claims. Return JSON."
@@ -15,10 +16,23 @@ def _as_bool(value) -> bool:
     return str(value).strip().lower() in {"true", "yes", "1"}
 
 
+def _critic_evidence(evidence: list[dict]) -> list[dict]:
+    """Keep the top-ranked excerpts for critic passes.
+
+    The research agent already ingests the full evidence set, and every critic
+    pass (including each revision) re-sent all of it — dominating prompt
+    tokens. The critic receives the most relevant excerpts in rank order,
+    which is enough to check claims and citations against.
+    """
+    return evidence[: settings.CRITIC_EVIDENCE_MAX_EXCERPTS]
+
+
 def critique(llm: LLMProvider, evidence: list[dict], draft: dict):
     prompt = (
         f"{UNTRUSTED_NOTE}\n\n"
-        f"<evidence>\n{render_evidence(evidence)}\n</evidence>\n\n"
+        f"<evidence>\n"
+        f"{render_evidence(_critic_evidence(evidence), max_chars=settings.CRITIC_EVIDENCE_BUDGET_CHARS)}\n"
+        f"</evidence>\n\n"
         f"Draft to review:\n{dumps(draft)}\n\n"
         "Return approved (boolean), unsupported_claims (list of strings quoted from the draft), notes."
     )

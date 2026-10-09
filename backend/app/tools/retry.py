@@ -52,6 +52,37 @@ def _detail(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Parse a ``Retry-After`` header (delta-seconds) from a rate-limit response."""
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    raw = exc.response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    if seconds < 0:
+        return None
+    return seconds
+
+
+def _delay_for(
+    exc: BaseException, reason: str, retry: int, default_base: float, ceiling: float
+) -> float:
+    """Backoff delay: fast exponential for ordinary transient failures,
+    window-aware for rate limits (Retry-After when provided, otherwise a
+    rate-limit-specific schedule capped at the rate-limit ceiling)."""
+    if reason == "rate_limit":
+        rate_ceiling = settings.RETRY_RATE_LIMIT_MAX_DELAY_SECONDS
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            return min(max(retry_after, 1.0), rate_ceiling)
+        return min(settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS * (2**retry), rate_ceiling)
+    return min(default_base * (2**retry), ceiling)
+
+
 def sanitize_error_text(text: str, limit: int = 200) -> str:
     """Single-line, credential-redacted, truncated provider error text."""
     cleaned = _SECRET_RE.sub(lambda m: f"{m.group(1)} [redacted]", text or "")
@@ -138,7 +169,7 @@ def call_with_retries(
             retryable, reason, status_code = classify(exc)
             if not retryable or retry >= limit:
                 raise
-            delay = min(base * (2**retry), ceiling)
+            delay = _delay_for(exc, reason, retry, base, ceiling)
             attempts.append(
                 RetryAttempt(
                     retry=retry + 1,

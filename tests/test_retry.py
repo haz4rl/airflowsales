@@ -138,8 +138,8 @@ def test_rate_limit_is_retried_with_exponential_backoff(delays, groq_post):
     assert usage["total_tokens"] == 15
     assert len(post.calls) == 3
     assert delays == [
-        settings.RETRY_BASE_DELAY_SECONDS,
-        settings.RETRY_BASE_DELAY_SECONDS * 2,
+        settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS,
+        settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS * 2,
     ]
     assert [attempt.retry for attempt in provider.retry_attempts] == [1, 2]
     assert {attempt.reason for attempt in provider.retry_attempts} == {"rate_limit"}
@@ -163,9 +163,54 @@ def test_rate_limit_exhaustion_raises_clean_error(delays, groq_post):
     assert len(post.calls) == settings.MAX_RETRIES + 1
     assert len(provider.retry_attempts) == settings.MAX_RETRIES
     assert delays == [
-        settings.RETRY_BASE_DELAY_SECONDS,
-        settings.RETRY_BASE_DELAY_SECONDS * 2,
+        settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS,
+        settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS * 2,
     ]
+
+
+def _rate_limit_error(retry_after: str | None = None) -> httpx.HTTPStatusError:
+    """A 429 HTTPStatusError, optionally carrying a Retry-After header."""
+    request = httpx.Request("POST", "https://example.invalid")
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    response = httpx.Response(429, headers=headers, request=request)
+    return httpx.HTTPStatusError("Too Many Requests", request=request, response=response)
+
+
+def test_rate_limit_honors_retry_after_header(delays, groq_post):
+    post = groq_post([_rate_limit_error(retry_after="42")], overflow=LLM_BODY)
+    provider = GroqProvider(api_key="test-key")
+
+    data, _ = generate(provider)
+
+    assert data["decision"] == "MAYBE"
+    assert len(post.calls) == 2
+    assert delays == [42.0]
+    assert provider.retry_attempts[0].delay_seconds == 42.0
+    assert provider.retry_attempts[0].reason == "rate_limit"
+
+
+def test_rate_limit_retry_after_is_capped_at_ceiling(delays, groq_post):
+    groq_post([_rate_limit_error(retry_after="300")], overflow=LLM_BODY)
+
+    generate()
+
+    assert delays == [settings.RETRY_RATE_LIMIT_MAX_DELAY_SECONDS]
+
+
+def test_rate_limit_retry_after_floors_tiny_values(delays, groq_post):
+    groq_post([_rate_limit_error(retry_after="0")], overflow=LLM_BODY)
+
+    generate()
+
+    assert delays == [1.0]
+
+
+def test_rate_limit_retry_after_unparseable_falls_back_to_window_backoff(delays, groq_post):
+    groq_post([_rate_limit_error(retry_after="soon")], overflow=LLM_BODY)
+
+    generate()
+
+    assert delays == [settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS]
 
 
 def test_server_error_is_retried_then_succeeds(delays, groq_post):
@@ -360,7 +405,7 @@ def test_search_rate_limit_is_retried(monkeypatch, delays):
 
     assert len(results) == 1
     assert len(post.calls) == 2
-    assert delays == [settings.RETRY_BASE_DELAY_SECONDS]
+    assert delays == [settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS]
     assert provider.retry_attempts[0].reason == "rate_limit"
 
 
@@ -400,14 +445,14 @@ def test_workflow_records_retry_attempts_as_events(db_session, monkeypatch, dela
 
     assert run.status == "COMPLETED"
     assert prospect.status == "MAYBE"
-    assert delays == [settings.RETRY_BASE_DELAY_SECONDS]
+    assert delays == [settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS]
 
     retry_events = [event for event in run.events if event.event_type == "RETRY"]
     assert len(retry_events) == 1
     assert retry_events[0].name == "research_agent_retry"
     assert retry_events[0].input == {"step": "research_agent"}
     assert retry_events[0].output["retry"] == 1
-    assert retry_events[0].output["delay_seconds"] == settings.RETRY_BASE_DELAY_SECONDS
+    assert retry_events[0].output["delay_seconds"] == settings.RETRY_RATE_LIMIT_BASE_DELAY_SECONDS
     assert retry_events[0].output["reason"] == "rate_limit"
     assert retry_events[0].output["status_code"] == 429
     assert retry_events[0].output["detail"] == "HTTP 429 Too Many Requests"

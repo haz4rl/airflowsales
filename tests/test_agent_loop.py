@@ -202,3 +202,90 @@ def test_list_campaigns_rejects_out_of_range_pagination(client):
     assert client.get("/v1/campaigns?limit=0").status_code == 422
     assert client.get("/v1/campaigns?limit=501").status_code == 422
     assert client.get("/v1/campaigns?skip=-1").status_code == 422
+
+
+class CapturingLLM(LLMProvider):
+    """Captures the (system, prompt) pair and returns a fixed review."""
+
+    def __init__(self):
+        self.calls = []
+
+    def generate_json(self, system, prompt):
+        self.calls.append((system, prompt))
+        return {"approved": True, "unsupported_claims": [], "notes": "Grounded."}, dict(USAGE)
+
+
+def _evidence(count: int, excerpt_len: int = 400) -> list[dict]:
+    return [
+        {
+            "url": f"https://example.com/{i}",
+            "title": f"Source {i}",
+            "excerpt": f"MARKER_{i} " + "x" * excerpt_len,
+        }
+        for i in range(1, count + 1)
+    ]
+
+
+def test_critique_sends_only_top_ranked_evidence_excerpts():
+    from backend.app.agents.critic import critique
+
+    llm = CapturingLLM()
+    evidence = _evidence(5)
+
+    critique(llm, evidence, dict(DRAFT))
+
+    prompt = llm.calls[0][1]
+    assert "MARKER_1" in prompt
+    assert "MARKER_2" in prompt
+    assert "MARKER_3" in prompt
+    assert "MARKER_4" not in prompt
+    assert "MARKER_5" not in prompt
+
+
+def test_critique_evidence_budget_caps_total_size(monkeypatch):
+    from backend.app.agents.critic import critique
+
+    monkeypatch.setattr(settings, "CRITIC_EVIDENCE_MAX_EXCERPTS", 3)
+    monkeypatch.setattr(settings, "CRITIC_EVIDENCE_BUDGET_CHARS", 1500)
+    llm = CapturingLLM()
+    evidence = _evidence(3, excerpt_len=5000)
+
+    critique(llm, evidence, dict(DRAFT))
+
+    prompt = llm.calls[0][1]
+    start = prompt.index("<evidence>") + len("<evidence>")
+    end = prompt.index("</evidence>")
+    block = prompt[start:end]
+    # render_evidence may overshoot the budget by one char for the "…" marker;
+    # the surrounding newlines add a couple more. The point is the ~3x5000-char
+    # untruncated set is nowhere near reaching the prompt.
+    assert len(block) <= 1500 + 10
+    assert "…" in block  # excerpts were truncated, not silently dropped
+
+
+def test_critique_preserves_rank_order_and_source_metadata():
+    from backend.app.agents.critic import critique
+
+    llm = CapturingLLM()
+    evidence = _evidence(4)
+
+    critique(llm, evidence, dict(DRAFT))
+
+    prompt = llm.calls[0][1]
+    assert prompt.index("MARKER_1") < prompt.index("MARKER_2") < prompt.index("MARKER_3")
+    assert "https://example.com/1" in prompt
+    assert "Source 1" in prompt
+    assert "https://example.com/4" not in prompt
+
+
+def test_critique_handles_fewer_excerpts_than_cap():
+    from backend.app.agents.critic import critique
+
+    llm = CapturingLLM()
+    evidence = _evidence(2)
+
+    critique(llm, evidence, dict(DRAFT))
+
+    prompt = llm.calls[0][1]
+    assert "MARKER_1" in prompt
+    assert "MARKER_2" in prompt

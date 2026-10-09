@@ -146,7 +146,11 @@ CI runs all of the above (backend tests also against a Postgres 16 service conta
 | `MAX_RETRIES` | no | `2` | Provider retries for transient failures |
 | `RETRY_BASE_DELAY_SECONDS` | no | `0.5` | Exponential backoff base |
 | `RETRY_MAX_DELAY_SECONDS` | no | `8` | Backoff ceiling |
+| `RETRY_RATE_LIMIT_BASE_DELAY_SECONDS` | no | `15` | 429 backoff base (Retry-After is honored when provided) |
+| `RETRY_RATE_LIMIT_MAX_DELAY_SECONDS` | no | `60` | 429 backoff ceiling |
 | `OUTREACH_MAX_REVISIONS` | no | `2` | Bound on critic-driven draft revisions |
+| `CRITIC_EVIDENCE_MAX_EXCERPTS` | no | `3` | Top-ranked evidence excerpts sent to critic passes |
+| `CRITIC_EVIDENCE_BUDGET_CHARS` | no | `5000` | Serialized-evidence budget for critic passes |
 | `CORS_ORIGINS` | no | `localhost:3000,localhost:8000` | Comma-separated allowed origins |
 
 ## Architecture choices
