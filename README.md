@@ -27,14 +27,29 @@ Most LLM prototypes collapse at the same seams: brittle JSON, no grounding, sile
 
 ## Screenshots
 
-<!-- Capture from the live demo (or local setup) and drop into docs/screenshots/ — see "Screenshot checklist" at the bottom of this file for exact pages/states. -->
+### Workflow run
 
-| | |
-| :---: | :---: |
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Campaigns](docs/screenshots/campaigns.png) |
-| ![Discover](docs/screenshots/discover.png) | ![Prospect detail](docs/screenshots/prospect-qualification.png) |
-| ![Revision loop timeline](docs/screenshots/revision-loop.png) | ![Human approval](docs/screenshots/approval.png) |
-| | ![Analytics](docs/screenshots/analytics.png) |
+![Workflow run detail: COMPLETED, 14 events, 17,259 tokens, 1m 05s, full agent execution timeline](docs/screenshots/workflow-run.png)
+
+One prospect through the whole pipeline — company search → research → qualification → outreach → critic — with per-step timing, token usage, retries, and the run record.
+
+### Qualification
+
+![Prospect qualification: Notion scored 12, No Go, 93% confidence, with score breakdown and reasoning](docs/screenshots/prospect-qualification.png)
+
+Score, decision, confidence, and reasoning are LLM-generated, schema-validated before persistence, and traceable to the evidence that produced them.
+
+### Critic review
+
+![Critic review: outreach draft rejected, unsupported claims flagged against collected evidence](docs/screenshots/critic-review.png)
+
+The critic re-checks every claim in the draft against collected evidence and rejects the draft when claims are unsupported — including claims that treat absence of evidence as fact.
+
+### Campaigns
+
+![Campaigns: European B2B SaaS campaign with SaaS and Fintech tags, Europe region, 10 to 200 employee headcount](docs/screenshots/campaigns.png)
+
+ICP, region, headcount bounds, and selling proposition are campaign inputs — the same agents run against any configuration.
 
 ## Agentic workflow
 
@@ -256,13 +271,3 @@ Built with AI-assisted development tooling. The architecture, failure-mode analy
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-<!-- ## Screenshot checklist (for the maintainer — remove this block once images are committed)
-1. docs/screenshots/dashboard.png        — Dashboard (/) after at least one completed discovery (summary cards populated)
-2. docs/screenshots/campaigns.png        — /campaigns with one campaign card visible
-3. docs/screenshots/discover.png         — /discover with a domain entered and a completed result panel (evidence count visible)
-4. docs/screenshots/prospect-qualification.png — /prospects/{id} of an AWAITING_APPROVAL prospect: status + decision badges, score breakdown, outreach draft, approved critic review
-5. docs/screenshots/revision-loop.png    — /runs/{id} of a run containing outreach_revision + critic_revision timeline events
-6. docs/screenshots/approval.png         — /prospects/{id} human-approval side panel (Approve/Reject + note field) on an AWAITING_APPROVAL prospect
-7. docs/screenshots/analytics.png        — /analytics with real run-status / token / cost charts
--->
